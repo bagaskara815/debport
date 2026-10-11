@@ -11,3 +11,14 @@ Heroic-Games-Launcher/HeroicGamesLauncher|*amd64.deb|
 https://rpm.librewolf.net/pool/|librewolf-*x86_64-deb.deb|
 2dust/v2rayN|v2rayN-linux-64.deb|
 https://files2.freedownloadmanager.org/6/latest/freedownloadmanager.deb|*|
+storytold/wordcraft|*-linux-x86_64.deb|
+storytold/photocraft|*-linux-x86_64.deb|
+storytold/vectorcraft|*-linux-x86_64.deb|
+storytold/cadcraft|*-linux-x86_64.deb|
+storytold/soundcraft|*-linux-x86_64.deb|
+storytold/lightcraft|*-linux-x86_64.deb|
+storytold/filmcraft|*-linux-x86_64.deb|
+storytold/effectcraft|*-linux-x86_64.deb|
+storytold/pdfcraft|*-linux-x86_64.deb|
+storytold/gridcraft|*-linux-x86_64.deb|
+storytold/designcraft|*-linux-x86_64.deb|
