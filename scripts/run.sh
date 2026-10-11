@@ -45,16 +45,41 @@ check_url() {
     return 1
 }
 
+deb_version() {
+    local f=$1 ctl tmpd ver
+    tmpd=$(mktemp -d) || return 1
+    ctl=$(ar t "$f" 2>/dev/null | sed -n '/^control\.tar/{p;q;}') || { rm -rf "$tmpd"; return 1; }
+    case "$ctl" in
+        control.tar.xz) ar p "$f" "$ctl" | tar -xJf - -C "$tmpd" || { rm -rf "$tmpd"; return 1; } ;;
+        control.tar.gz) ar p "$f" "$ctl" | tar -zxf - -C "$tmpd" || { rm -rf "$tmpd"; return 1; } ;;
+        control.tar.zst) ar p "$f" "$ctl" | tar --zstd -xf - -C "$tmpd" || { rm -rf "$tmpd"; return 1; } ;;
+        control.tar.bz2) ar p "$f" "$ctl" | tar -xjf - -C "$tmpd" || { rm -rf "$tmpd"; return 1; } ;;
+        control.tar) ar p "$f" "$ctl" | tar -xf - -C "$tmpd" || { rm -rf "$tmpd"; return 1; } ;;
+        *) rm -rf "$tmpd"; return 1 ;;
+    esac
+    ver=$(sed -n 's/^Version:[ \t]*//p' "$tmpd/control" 2>/dev/null | head -n 1)
+    rm -rf "$tmpd"
+    [ -n "$ver" ] || return 1
+    printf '%s\n' "$ver"
+}
+
 convert_one() {
     local repo=$1 glob=$2
     shift 2
-    local tag dir statefile dbf pkn pkv pkgver expected
+    local tag dir statefile tmpdeb dbf pkn pkv pkgver expected
     local -a deb_files
 
     case "$repo" in
         https://*.deb|http://*.deb)
             statefile="state/${repo//\//_}.txt"
-            tag="$repo"
+            tmpdeb=$(mktemp) || return 1
+            curl --retry 3 -fsSL -o "$tmpdeb" "$repo" || { rm -f "$tmpdeb"; return 1; }
+            tag=$(deb_version "$tmpdeb") || { rm -f "$tmpdeb"; echo "::error::cannot read Version from control data in $repo" >&2; return 1; }
+            if [ "$FORCE" != true ] && [ -f "$statefile" ] && [ "$(cat "$statefile")" = "$tag" ]; then
+                rm -f "$tmpdeb"
+                echo "skip $repo@$tag"
+                return 0
+            fi
             ;;
         https://*|http://*)
             statefile="state/${repo//\//_}.txt"
@@ -86,7 +111,7 @@ convert_one() {
 
     case "$repo" in
         https://*.deb|http://*.deb)
-            curl --retry 3 -fsSL -o "$dir/debs/${repo##*/}" "$repo" || return 1
+            mv "$tmpdeb" "$dir/debs/${repo##*/}" || return 1
             deb_files=("$dir/debs/${repo##*/}")
             ;;
         https://*|http://*)
