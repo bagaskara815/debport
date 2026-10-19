@@ -45,6 +45,24 @@ check_url() {
     return 1
 }
 
+# Wait until the published repodata is byte-identical to the one just uploaded.
+# A 200 alone is not proof: clobbered assets may still be served from a stale edge copy.
+wait_repodata_fresh() {
+    local local_file=$1 url=$2 want got attempt
+    want=$(sha256sum "$local_file" | cut -d' ' -f1)
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        got=$(curl -fsSL "$url" 2>/dev/null | sha256sum | cut -d' ' -f1)
+        if [ "$got" = "$want" ]; then
+            return 0
+        fi
+        if [ "$attempt" -lt 10 ]; then
+            sleep 12
+        fi
+    done
+    echo "ERROR: $url stale after $attempt attempts (served ${got:0:12}, expected ${want:0:12})" >&2
+    return 1
+}
+
 deb_version() {
     local f=$1 ctl tmpd ver
     tmpd=$(mktemp -d) || return 1
@@ -131,8 +149,12 @@ convert_one() {
     esac
 
     mkdir -p "$dir/pkgroot/binpkgs" || return 1
-    curl --retry 3 -fsSL -o "$dir/pkgroot/binpkgs/x86_64-repodata" "$RELEASE_URL/x86_64-repodata" \
-        || rm -f "$dir/pkgroot/binpkgs/x86_64-repodata"
+    if [ -s work/repodata.last ]; then
+        cp work/repodata.last "$dir/pkgroot/binpkgs/x86_64-repodata" || return 1
+    else
+        curl --retry 3 -fsSL -o "$dir/pkgroot/binpkgs/x86_64-repodata" "$RELEASE_URL/x86_64-repodata" \
+            || rm -f "$dir/pkgroot/binpkgs/x86_64-repodata"
+    fi
 
     keymount=""
     if [ -f work/signing_key ]; then
@@ -164,7 +186,7 @@ convert_one() {
         fi
         expected="${pkv}.x86_64.xbps"
         [ -f "$dir/pkgroot/binpkgs/$expected" ] || { echo "ERROR: produced $dbf != $expected" >&2; return 1; }
-        check_url "$RELEASE_URL/x86_64-repodata" || { echo "ERROR: repodata not served" >&2; return 1; }
+        wait_repodata_fresh "$dir/pkgroot/binpkgs/x86_64-repodata" "$RELEASE_URL/x86_64-repodata" || return 1
         check_url "$RELEASE_URL/$expected" || { echo "ERROR: $expected not served" >&2; return 1; }
         check_url "$RELEASE_URL/${expected}.sig2" || { echo "ERROR: ${expected}.sig2 not served" >&2; return 1; }
         eprefix=""
@@ -195,6 +217,8 @@ convert_one() {
                 echo "::warning::failed to delete obsolete asset $aname"; }
         done < <(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[] | "\(.id)\t\(.name)"')
     done < "$dir/pkgroot/manifest"
+
+    cp "$dir/pkgroot/binpkgs/x86_64-repodata" work/repodata.last || return 1
 
     mkdir -p "$(dirname "$statefile")" || return 1
     printf '%s\n' "$tag" > "$statefile" || return 1
