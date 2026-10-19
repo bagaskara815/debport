@@ -2,7 +2,7 @@ name: Convert deb to xbps
 
 on:
   schedule:
-    - cron: "23 3 * * 1"
+    - cron: "0 0 */3 * *"
   workflow_dispatch:
     inputs:
       repo:

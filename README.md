@@ -12,7 +12,7 @@ There is no local CLI. Everything runs in CI.
 
 ```mermaid
 flowchart LR
-    W[watchlist.txt] --> P[poll weekly or manual dispatch]
+    W[watchlist.txt] --> P[poll every 3 days or manual dispatch]
     P --> D[download .deb assets]
     D --> C[convert with xdeb in container]
     C --> S[sign repo and packages]
@@ -84,7 +84,7 @@ to the repo, so unchanged entries are cheaply skipped on the next run.
 ## Repository layout
 
 ```
-.github/workflows/convert.yml   # weekly poll + manual trigger, artifact upload
+.github/workflows/convert.yml   # 3-day poll (00:00 UTC = 07:00 WIB) + manual trigger, artifact upload
 scripts/convert.sh              # runs INSIDE the container: installs missing tools,
                                 # converts each .deb with xdeb, asserts output + repodata,
                                 # records a manifest, signs repo + packages with XBPS_PRIVKEY
