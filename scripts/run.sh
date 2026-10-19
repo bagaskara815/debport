@@ -150,12 +150,19 @@ convert_one() {
             --notes "Auto-converted .xbps packages, RSA-signed. Install: xbps-install -S -R ${RELEASE_URL} <pkg> (answer Y to import the signing key)" || return 1
     gh release edit "$RELEASE_TAG" --draft=false || return 1
     gh release upload "$RELEASE_TAG" "$dir"/pkgroot/binpkgs/*.xbps "$dir"/pkgroot/binpkgs/*.xbps.sig2 "$dir/pkgroot/binpkgs/x86_64-repodata" --clobber || return 1
-    keep="$(ls "$dir"/pkgroot/binpkgs/*.xbps "$dir"/pkgroot/binpkgs/*.xbps.sig2 "$dir/pkgroot/binpkgs/x86_64-repodata" | xargs -n1 basename | sort)"
-    gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[].name' | sort -u | comm -23 - <(printf '%s\n' "$keep") | while IFS= read -r old; do
-        echo "deleting obsolete asset $old"
-        gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq ".assets[] | select(.name == \"$old\") | .id")" >/dev/null || {
-            echo "::warning::failed to delete obsolete asset $old"; }
-    done
+    IFS=$'\t' read -r dbf pkn pkv < "$dir/pkgroot/manifest"
+    while IFS=$'\t' read -r aid aname; do
+        case "$aname" in
+            "$pkn"-*|x86_64-repodata) ;;
+            *) continue;;
+        esac
+        case "$aname" in
+            "$pkv.x86_64.xbps"|"$pkv.x86_64.xbps.sig2") continue;;
+        esac
+        echo "deleting obsolete asset $aname"
+        gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$aid" >/dev/null || {
+            echo "::warning::failed to delete obsolete asset $aname"; }
+    done < <(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[] | "\(.id)\t\(.name)"')
 
     if [ ! -s "$dir/pkgroot/manifest" ]; then
         echo "ERROR: conversion manifest missing for $repo" >&2
