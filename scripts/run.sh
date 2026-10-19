@@ -149,25 +149,12 @@ convert_one() {
         gh release create "$RELEASE_TAG" --title "xbps repository" \
             --notes "Auto-converted .xbps packages, RSA-signed. Install: xbps-install -S -R ${RELEASE_URL} <pkg> (answer Y to import the signing key)" || return 1
     gh release edit "$RELEASE_TAG" --draft=false || return 1
-    gh release upload "$RELEASE_TAG" "$dir"/pkgroot/binpkgs/*.xbps "$dir"/pkgroot/binpkgs/*.xbps.sig2 "$dir/pkgroot/binpkgs/x86_64-repodata" --clobber || return 1
-    IFS=$'\t' read -r dbf pkn pkv < "$dir/pkgroot/manifest"
-    while IFS=$'\t' read -r aid aname; do
-        case "$aname" in
-            "$pkn"-*|x86_64-repodata) ;;
-            *) continue;;
-        esac
-        case "$aname" in
-            "$pkv.x86_64.xbps"|"$pkv.x86_64.xbps.sig2") continue;;
-        esac
-        echo "deleting obsolete asset $aname"
-        gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$aid" >/dev/null || {
-            echo "::warning::failed to delete obsolete asset $aname"; }
-    done < <(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[] | "\(.id)\t\(.name)"')
-
     if [ ! -s "$dir/pkgroot/manifest" ]; then
         echo "ERROR: conversion manifest missing for $repo" >&2
         return 1
     fi
+    gh release upload "$RELEASE_TAG" "$dir"/pkgroot/binpkgs/*.xbps "$dir"/pkgroot/binpkgs/*.xbps.sig2 "$dir/pkgroot/binpkgs/x86_64-repodata" --clobber || return 1
+
     while IFS=$'\t' read -r dbf pkn pkv; do
         pkgver=$(docker run --rm -v "$PWD/$dir/pkgroot:/pkgroot:ro" "$IMAGE" \
             xbps-query --repository=/pkgroot/binpkgs -p pkgver "$pkn") || return 1
@@ -195,6 +182,18 @@ convert_one() {
             fi
             sleep 30
         done
+        while IFS=$'\t' read -r aid aname; do
+            case "$aname" in
+                "$pkn"-*) ;;
+                *) continue;;
+            esac
+            case "$aname" in
+                "$expected"|"${expected}.sig2") continue;;
+            esac
+            echo "deleting obsolete asset $aname"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$aid" >/dev/null || {
+                echo "::warning::failed to delete obsolete asset $aname"; }
+        done < <(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[] | "\(.id)\t\(.name)"')
     done < "$dir/pkgroot/manifest"
 
     mkdir -p "$(dirname "$statefile")" || return 1
