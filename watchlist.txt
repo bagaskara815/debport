@@ -22,3 +22,4 @@ storytold/effectcraft|*-linux-x86_64.deb|
 storytold/pdfcraft|*-linux-x86_64.deb|
 storytold/gridcraft|*-linux-x86_64.deb|
 storytold/designcraft|*-linux-x86_64.deb|
+https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/|microsoft-edge-stable_*_amd64.deb|
