@@ -1,1 +1,1 @@
-librewolf-158.0-1-linux-x86_64-deb.deb
+librewolf-158.0.1-1-linux-x86_64-deb.deb
