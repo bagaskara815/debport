@@ -75,7 +75,7 @@ Rules:
 
 | Trigger | How |
 | --- | --- |
-| Scheduled | CircleCI schedule trigger `0 0 1,4,7,10,13,16,19,22,25,28,31 * *` (UTC, every 3 days) on `master`. Upstream repos cannot webhook here, so polling is the only trigger. |
+| Scheduled | Created in CircleCI, not in this config: **Project Settings → Project Setup → Schedule +** (GitHub App) or **Triggers** (GitHub OAuth), checkout/config branch `master`. For GitHub App integrations use cron `0 0 1,4,7,10,13,16,19,22,25,28,31 * *` (UTC, every 3 days). Upstream repos cannot webhook here, so polling is the only trigger. |
 | Manual | CircleCI → *Trigger Pipeline*: `repo` scopes the run to one watchlist entry (empty = all), `force` reconverts even when the tag is already recorded in `state/`. |
 
 Runs write `state/<source>.txt` with the converted revision and commit it back
@@ -97,8 +97,10 @@ state/                          # last converted revision per source (committed 
 ## Requirements
 
 - The repository must be **public** (anonymous fetch of the release assets).
-- The project must be set up on CircleCI with a `master` branch and two
-  **project environment variables**:
+- The project must be set up on CircleCI with a `master` branch, and the 3-day
+  schedule trigger must be created once in CircleCI (see *Running*); config-level
+  `triggers:` is not supported for GitHub App integrations.
+- The project needs two **project environment variables**:
   - `XBPS_PRIVKEY`: an RSA private key (PEM, or base64 of the PEM) used to sign
     the repository metadata and packages. Without it the pipeline fails fast:
     remote xbps installs require signed `.xbps.sig2` files.
