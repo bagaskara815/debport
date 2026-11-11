@@ -66,7 +66,8 @@ workflows:
               only: master
     triggers:
       - schedule:
-          cron: "0 0 */3 * *"
+          # CircleCI rejects step syntax (*/3); explicit list = every 3 days, from the 1st.
+          cron: "0 0 1,4,7,10,13,16,19,22,25,28,31 * *"
           filters:
             branches:
               only: master

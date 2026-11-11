@@ -75,7 +75,7 @@ Rules:
 
 | Trigger | How |
 | --- | --- |
-| Scheduled | CircleCI schedule trigger `0 0 */3 * *` (UTC) on `master`. Upstream repos cannot webhook here, so polling is the only trigger. |
+| Scheduled | CircleCI schedule trigger `0 0 1,4,7,10,13,16,19,22,25,28,31 * *` (UTC, every 3 days) on `master`. Upstream repos cannot webhook here, so polling is the only trigger. |
 | Manual | CircleCI → *Trigger Pipeline*: `repo` scopes the run to one watchlist entry (empty = all), `force` reconverts even when the tag is already recorded in `state/`. |
 
 Runs write `state/<source>.txt` with the converted revision and commit it back
