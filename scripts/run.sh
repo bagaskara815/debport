@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+trap 'rc=$?; printf "ERROR: scripts/run.sh failed at line %s (exit %s)\n" "$LINENO" "$rc" >&2' ERR
+
 cd "$(dirname "$0")/.."
 
 ONLY_REPO=${ONLY_REPO:-}
@@ -29,12 +31,39 @@ fi
 if [ -n "${XBPS_PRIVKEY:-}" ]; then
     umask 077
     mkdir -p work/key
-    case "$XBPS_PRIVKEY" in
-        *"BEGIN "*)
-            printf '%s\n' "$XBPS_PRIVKEY" > work/signing_key ;;
-        *)
-            printf '%s' "$XBPS_PRIVKEY" | base64 -d > work/signing_key ;;
-    esac
+    python3 - <<'PYEOF' > work/signing_key
+import base64, os, re, sys
+
+v = os.environ["XBPS_PRIVKEY"].strip()
+if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+    v = v[1:-1].strip()
+v = v.replace("\\n", "\n").replace("\\r", "").replace("\r", "")
+if "BEGIN" in v:
+    m = re.search(r"-----BEGIN ([A-Z0-9 ]+?)-----(.*?)-----END \1-----", v, re.S)
+    if not m:
+        sys.exit("ERROR: XBPS_PRIVKEY has a PEM header but no matching footer")
+    body = re.sub(r"\s+", "", m.group(2))
+    if not body:
+        sys.exit("ERROR: XBPS_PRIVKEY PEM body is empty")
+    sys.stdout.write("-----BEGIN %s-----\n" % m.group(1))
+    for i in range(0, len(body), 64):
+        sys.stdout.write(body[i:i + 64] + "\n")
+    sys.stdout.write("-----END %s-----\n" % m.group(1))
+else:
+    compact = re.sub(r"\s+", "", v)
+    try:
+        data = base64.b64decode(compact, validate=True)
+    except Exception as exc:
+        sys.exit("ERROR: XBPS_PRIVKEY is neither PEM nor valid base64 (%s)" % exc)
+    if b"BEGIN" not in data:
+        sys.exit("ERROR: XBPS_PRIVKEY decodes to data that is not a PEM key")
+    sys.stdout.write(data.decode("ascii"))
+PYEOF
+    if ! openssl rsa -in work/signing_key -noout >/dev/null 2>work/openssl.err; then
+        sed 's/^/  /' work/openssl.err >&2
+        echo "ERROR: XBPS_PRIVKEY is not a usable unencrypted RSA private key (store PEM or base64 PEM)" >&2
+        exit 1
+    fi
     openssl rsa -in work/signing_key -pubout -out work/key/pubkey.pem 2>/dev/null
     fp=$(ssh-keygen -y -f work/signing_key | python3 -c 'import base64,hashlib,sys; b=base64.b64decode(sys.stdin.read().split()[1]); print(":".join("%02x"%x for x in hashlib.md5(b).digest()))')
     python3 - "$fp" <<'PYEOF'
