@@ -1,9 +1,9 @@
 # debport
 
-[![Convert deb to xbps](https://github.com/bagaskara815/debport/actions/workflows/convert.yml/badge.svg)](https://github.com/bagaskara815/debport/actions/workflows/convert.yml)
+[![CircleCI](https://dl.circleci.com/status-badge/img/gh/bagaskara815/debport/tree/master.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/bagaskara815/debport/tree/master)
 [![xbps-repo](https://img.shields.io/github/v/release/bagaskara815/debport?filter=xbps-repo&label=xbps-repo)](https://github.com/bagaskara815/debport/releases/tag/xbps-repo)
 
-A GitHub-Actions-only tool that converts upstream `.deb` packages to Void Linux
+A CircleCI-only tool that converts upstream `.deb` packages to Void Linux
 `.xbps` packages and publishes them as an installable xbps repository.
 
 There is no local CLI. Everything runs in CI.
@@ -12,23 +12,23 @@ There is no local CLI. Everything runs in CI.
 
 ```mermaid
 flowchart LR
-    W[watchlist.txt] --> P[poll every 3 days or manual dispatch]
+    W[watchlist.txt] --> P[scheduled every 3 days or manual pipeline]
     P --> D[download .deb assets]
     D --> C[convert with xdeb in container]
     C --> S[sign repo and packages]
     S --> U[upload to xbps-repo release]
     U --> V[post-publish verify]
     V --> T[commit state]
-    U --> A[upload Actions artifact]
+    U --> A[store xbps-packages artifact]
 ```
 
-Every week the workflow polls the watchlist. When a source publishes something
-new, the matching `.deb` assets are downloaded, converted to `.xbps` with
-[xdeb](https://github.com/xdeb-org/xdeb) inside the
+A scheduled CircleCI pipeline polls the watchlist every 3 days. When a source
+publishes something new, the matching `.deb` assets are downloaded, converted to
+`.xbps` with [xdeb](https://github.com/xdeb-org/xdeb) inside the
 `ghcr.io/void-linux/void-buildroot-glibc` container, RSA-signed, and uploaded
 to the `xbps-repo` release of **this** repository. That release doubles as a
 remote xbps repository, so converted apps install like any Void package.
-Converted packages are also attached to the run as an Actions artifact.
+Converted packages are also stored as a pipeline artifact.
 
 ## Quick start
 
@@ -75,8 +75,8 @@ Rules:
 
 | Trigger | How |
 | --- | --- |
-| Scheduled | `23 3 * * 1` (Monday 03:23 UTC). Upstream repos cannot webhook here, so polling is the only trigger. |
-| Manual | Actions → *Convert deb to xbps* → Run workflow. Leave `repo` empty to convert all entries (or scope to one); `force: true` reconverts even when the tag is already recorded in `state/`. |
+| Scheduled | CircleCI schedule trigger `0 0 */3 * *` (UTC) on `master`. Upstream repos cannot webhook here, so polling is the only trigger. |
+| Manual | CircleCI → *Trigger Pipeline*: `repo` scopes the run to one watchlist entry (empty = all), `force` reconverts even when the tag is already recorded in `state/`. |
 
 Runs write `state/<source>.txt` with the converted revision and commit it back
 to the repo, so unchanged entries are cheaply skipped on the next run.
@@ -84,11 +84,11 @@ to the repo, so unchanged entries are cheaply skipped on the next run.
 ## Repository layout
 
 ```
-.github/workflows/convert.yml   # 3-day poll (00:00 UTC = 07:00 WIB) + manual trigger, artifact upload
+.circleci/config.yml            # 3-day schedule (00:00 UTC = 07:00 WIB), pipeline parameters, artifacts
 scripts/convert.sh              # runs INSIDE the container: installs missing tools,
                                 # converts each .deb with xdeb, asserts output + repodata,
                                 # records a manifest, signs repo + packages with XBPS_PRIVKEY
-scripts/run.sh                  # runner-side orchestrator: poll, download, seed repodata,
+scripts/run.sh                  # machine-side orchestrator: poll, download, seed repodata,
                                 # convert in container, publish, verify, record state
 watchlist.txt                   # sources to poll
 state/                          # last converted revision per source (committed by CI)
@@ -97,16 +97,26 @@ state/                          # last converted revision per source (committed 
 ## Requirements
 
 - The repository must be **public** (anonymous fetch of the release assets).
-- Actions secret `XBPS_PRIVKEY`: an RSA private key (PEM) used to sign the
-  repository metadata and packages. Without it the workflow fails fast:
-  remote xbps installs require signed `.xbps.sig2` files.
+- The project must be set up on CircleCI with a `master` branch and two
+  **project environment variables**:
+  - `XBPS_PRIVKEY`: an RSA private key (PEM, or base64 of the PEM) used to sign
+    the repository metadata and packages. Without it the pipeline fails fast:
+    remote xbps installs require signed `.xbps.sig2` files.
+  - `GH_TOKEN`: a GitHub token with write access to this repository (classic
+    `repo` scope, or a fine-grained token with *Contents: read and write*).
+    It is used for release assets, upstream release lookups, and the state
+    commit push.
+- The `.circleci/config.yml` job runs on the `machine` executor because
+  `docker run -v` mounts are required for the conversion container; it rewrites
+  `origin` to an HTTPS token remote before pushing state.
 
 ## Design notes
 
 - Results are published as **release assets**, not git blobs: `.xbps` files
   exceed GitHub's 100 MB per-file limit while release assets allow 2 GB.
-- Old package versions are never pruned from the release; the repodata index
-  always points at the newest version (stale assets are unreferenced).
+- Superseded package versions are deleted only after the new package verifies;
+  the repodata index always points at the newest version.
 - Post-publish verification checks that every served filename matches the
-  `pkgver.arch.xbps` convention, and resolves each package against the real
-  release URL plus the official Void repo before recording state.
+  `pkgver.arch.xbps` convention, that the served repodata is byte-identical to
+  the one just uploaded, and resolves each package against the real release URL
+  plus the official Void repo before recording state.

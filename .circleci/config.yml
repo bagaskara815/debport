@@ -1,0 +1,72 @@
+version: 2.1
+
+parameters:
+  repo:
+    type: string
+    default: ""
+  force:
+    type: boolean
+    default: false
+
+jobs:
+  convert:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: medium
+    steps:
+      - checkout
+
+      - run:
+          name: Preflight
+          command: |
+            set -eu
+            : "${GH_TOKEN:?GH_TOKEN project env var is required}"
+            : "${XBPS_PRIVKEY:?XBPS_PRIVKEY project env var is required}"
+            command -v docker >/dev/null 2>&1 || { echo "docker is not available on this executor" >&2; exit 1; }
+
+      - run:
+          name: Install GitHub CLI
+          command: |
+            if command -v gh >/dev/null 2>&1; then exit 0; fi
+            gh_version=2.62.0
+            curl -fsSL "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_amd64.tar.gz" -o /tmp/gh.tgz
+            sudo tar -xzf /tmp/gh.tgz -C /tmp
+            sudo install -m 0755 "/tmp/gh_${gh_version}_linux_amd64/bin/gh" /usr/local/bin/gh
+
+      - run:
+          name: Push state over a token-authenticated remote
+          command: |
+            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git"
+
+      - run:
+          name: Convert deb to xbps
+          command: bash scripts/run.sh
+          environment:
+            ONLY_REPO: << pipeline.parameters.repo >>
+            FORCE: << pipeline.parameters.force >>
+
+      - run:
+          name: Collect xbps artifacts
+          command: |
+            mkdir -p artifacts
+            if [ -f work/converted ]; then
+              find work -path '*/pkgroot/binpkgs/*.xbps' -exec cp -t artifacts {} +
+            fi
+
+      - store_artifacts:
+          path: artifacts
+          destination: xbps-packages
+
+workflows:
+  convert:
+    jobs:
+      - convert:
+          filters:
+            branches:
+              only: master
+    triggers:
+      - schedule:
+          cron: "0 0 */3 * *"
+          filters:
+            branches:
+              only: master

@@ -10,17 +10,31 @@ FORCE=${FORCE:-}
 
 RELEASE_TAG=xbps-repo
 IMAGE=ghcr.io/void-linux/void-buildroot-glibc:latest
-RELEASE_URL="https://github.com/${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}/releases/download/${RELEASE_TAG}"
+if [ -z "${GITHUB_REPOSITORY:-}" ] && [ -n "${CIRCLE_PROJECT_USERNAME:-}" ] && [ -n "${CIRCLE_PROJECT_REPONAME:-}" ]; then
+    GITHUB_REPOSITORY="${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}"
+fi
+: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY or CIRCLE_PROJECT_USERNAME/CIRCLE_PROJECT_REPONAME must be set}"
+export GITHUB_REPOSITORY
+RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
 REPO_URL=https://repo-default.voidlinux.org/current
 
-if [ -n "${GITHUB_ACTIONS:-}" ] && [ -z "${XBPS_PRIVKEY:-}" ]; then
-    echo "ERROR: XBPS_PRIVKEY secret is not set; packages cannot be signed" >&2
+if [ -n "${CI:-}" ] && [ -z "${XBPS_PRIVKEY:-}" ]; then
+    echo "ERROR: XBPS_PRIVKEY is not set; packages cannot be signed" >&2
+    exit 1
+fi
+if [ -n "${CI:-}" ] && [ -z "${GH_TOKEN:-}" ]; then
+    echo "ERROR: GH_TOKEN is not set; gh cannot reach the GitHub API" >&2
     exit 1
 fi
 if [ -n "${XBPS_PRIVKEY:-}" ]; then
     umask 077
     mkdir -p work/key
-    printf '%s\n' "$XBPS_PRIVKEY" > work/signing_key
+    case "$XBPS_PRIVKEY" in
+        *"BEGIN "*)
+            printf '%s\n' "$XBPS_PRIVKEY" > work/signing_key ;;
+        *)
+            printf '%s' "$XBPS_PRIVKEY" | base64 -d > work/signing_key ;;
+    esac
     openssl rsa -in work/signing_key -pubout -out work/key/pubkey.pem 2>/dev/null
     fp=$(ssh-keygen -y -f work/signing_key | python3 -c 'import base64,hashlib,sys; b=base64.b64decode(sys.stdin.read().split()[1]); print(":".join("%02x"%x for x in hashlib.md5(b).digest()))')
     python3 - "$fp" <<'PYEOF'
@@ -262,11 +276,12 @@ if [ -d state ]; then
         git config user.name  "bagaskara815"
         git config user.email "bagaskara815@gmail.com"
         git commit -m "state: record converted release tags"
-        if [ "${GITHUB_ACTIONS:-}" = "true" ]; then git push; fi
+        if [ -n "${CI:-}" ]; then git push origin "HEAD:${CIRCLE_BRANCH:-master}"; fi
     fi
 fi
 
-if [ -n "${GITHUB_OUTPUT:-}" ] && [ "$any_converted" = true ]; then
-    echo "converted=true" >> "$GITHUB_OUTPUT"
+if [ "$any_converted" = true ]; then
+    mkdir -p work
+    touch work/converted
 fi
 [ "$failures" -eq 0 ] || exit 1
