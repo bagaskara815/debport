@@ -52,6 +52,7 @@ jobs:
             if [ -f work/converted ]; then
               find work -path '*/pkgroot/binpkgs/*.xbps' -exec cp -t artifacts {} +
             fi
+            rm -rf work
 
       - store_artifacts:
           path: artifacts
