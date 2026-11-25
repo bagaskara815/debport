@@ -52,7 +52,9 @@ jobs:
             if [ -f work/converted ]; then
               find work -path '*/pkgroot/binpkgs/*.xbps' -exec cp -t artifacts {} +
             fi
-            rm -rf work
+            # xdeb runs as root inside the container, so pkgroot/destdir is
+            # root-owned; the host user cannot traverse or delete it.
+            sudo rm -rf work
 
       - store_artifacts:
           path: artifacts
