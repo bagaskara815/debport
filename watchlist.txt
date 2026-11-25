@@ -12,3 +12,4 @@ https://repo.librewolf.net/pool/|librewolf-*x86_64-deb.deb|
 2dust/v2rayN|v2rayN-linux-64.deb|
 https://files2.freedownloadmanager.org/6/latest/freedownloadmanager.deb|*|
 https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/|microsoft-edge-stable_*_amd64.deb|
+AnInsomniacy/rayburst|Rayburst_*_amd64.deb|
