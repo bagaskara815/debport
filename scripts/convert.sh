@@ -6,7 +6,7 @@ pkgroot=$2
 shift 2
 
 missing=""
-for spec in xz:xz tar:tar curl:curl ar:binutils objdump:binutils xbps-rindex:xbps xbps-create:xbps; do
+for spec in xz:xz tar:tar curl:curl sha256sum:coreutils ar:binutils objdump:binutils xbps-rindex:xbps xbps-create:xbps; do
     command -v "${spec%%:*}" >/dev/null 2>&1 || missing="$missing ${spec##*:}"
 done
 if ! printf 'x\n' | grep -P 'x' >/dev/null 2>&1; then
@@ -20,8 +20,11 @@ if ! printf 'x\n' | grep -P 'x' >/dev/null 2>&1; then
     exit 1
 fi
 
+XDEB_VERSION=${XDEB_VERSION:-v1.5}
+XDEB_SHA256=${XDEB_SHA256:-9fb86b911d3106dd6288c989c53677d56d49603206f423c83f67fbb9a8d0e093}
 mkdir -p "$pkgroot"
-curl --retry 3 -fsSLo "$pkgroot/xdeb" https://github.com/xdeb-org/xdeb/releases/latest/download/xdeb
+curl --retry 3 -fsSLo "$pkgroot/xdeb" "https://github.com/xdeb-org/xdeb/releases/download/${XDEB_VERSION}/xdeb"
+printf '%s  %s\n' "$XDEB_SHA256" "$pkgroot/xdeb" | sha256sum -c -
 chmod 0755 "$pkgroot/xdeb"
 export XDEB_PKGROOT="$pkgroot"
 
@@ -53,11 +56,13 @@ for f in "$debs_dir"/*.deb; do
         control.tar)     ar p "$f" "$ctl" | tar -xf - -C "$pkgroot/ctldir" || exit 1;;
         *) echo "ERROR: unsupported control archive '$ctl' in $(basename "$f")" >&2; exit 1;;
     esac
-    pkgname=$(sed -n 's/^Package:[[:space:]]*//p' "$pkgroot/ctldir/control" | head -n 1)
-    if [ -z "$pkgname" ]; then
-        echo "ERROR: no Package field in $(basename "$f")" >&2
-        exit 1
-    fi
+    pkgname=$(sed -n 's/^Package:[[:space:]]*//p' "$pkgroot/ctldir/control" | tr -d '\r' | head -n 1)
+    case "$pkgname" in
+        ""|[!A-Za-z0-9]*|*[!A-Za-z0-9+._-]*)
+            echo "ERROR: invalid or missing Package field '$pkgname' in $(basename "$f")" >&2
+            exit 1
+            ;;
+    esac
     pkgver=$(xbps-query --repository="$pkgroot/binpkgs" -p pkgver "$pkgname" 2>/dev/null || true)
     if [ -z "$pkgver" ]; then
         echo "ERROR: $pkgname missing from repodata" >&2
@@ -78,9 +83,4 @@ fi
 if [ ! -s "$pkgroot/binpkgs/${arch}-repodata" ]; then
     echo "ERROR: repodata missing" >&2
     exit 1
-fi
-
-if [ -f /signing_key ]; then
-    xbps-rindex --sign --privkey /signing_key --signedby "bagaskara815 <bagaskara815@gmail.com>" "$pkgroot/binpkgs"
-    xbps-rindex --sign-pkg --privkey /signing_key "$pkgroot"/binpkgs/*.xbps
 fi

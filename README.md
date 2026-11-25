@@ -59,7 +59,7 @@ Add one line to [`watchlist.txt`](watchlist.txt):
 | Source form | Example | Update detection |
 | --- | --- | --- |
 | GitHub releases (`owner/repo`) | `imputnet/helium-linux\|*_amd64.deb\|` | latest release tag |
-| HTTP directory pool (ends in `/`) | `https://rpm.librewolf.net/pool/\|librewolf-*x86_64-deb.deb\|` | newest matching filename (version sort) |
+| HTTP directory pool (ends in `/`) | `https://repo.librewolf.net/pool/\|librewolf-*x86_64-deb.deb\|` | newest matching filename (version sort) |
 | Direct `.deb` link | `https://example.com/dist/foo_1.2_amd64.deb\|*\|` | the URL itself (re-runs when the URL changes) |
 
 Rules:
@@ -84,12 +84,12 @@ to the repo, so unchanged entries are cheaply skipped on the next run.
 ## Repository layout
 
 ```
-.circleci/config.yml            # 3-day schedule (00:00 UTC = 07:00 WIB), pipeline parameters, artifacts
-scripts/convert.sh              # runs INSIDE the container: installs missing tools,
-                                # converts each .deb with xdeb, asserts output + repodata,
-                                # records a manifest, signs repo + packages with XBPS_PRIVKEY
+.circleci/config.yml            # CircleCI machine job, pipeline parameters, artifacts
+scripts/convert.sh              # runs INSIDE the conversion container: installs missing tools,
+                                # downloads SHA-256 verified xdeb, converts each .deb, asserts output + repodata,
+                                # records a manifest
 scripts/run.sh                  # machine-side orchestrator: poll, download, seed repodata,
-                                # convert in container, publish, verify, record state
+                                # convert in container, sign in isolated container, verify, publish, record state
 watchlist.txt                   # sources to poll
 state/                          # last converted revision per source (committed by CI)
 ```

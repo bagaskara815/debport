@@ -59,7 +59,7 @@ else:
         sys.exit("ERROR: XBPS_PRIVKEY decodes to data that is not a PEM key")
     sys.stdout.write(data.decode("ascii"))
 PYEOF
-    if ! openssl rsa -in work/signing_key -noout >/dev/null 2>work/openssl.err; then
+    if ! openssl rsa -in work/signing_key -passin pass: -noout >/dev/null 2>work/openssl.err; then
         sed 's/^/  /' work/openssl.err >&2
         echo "ERROR: XBPS_PRIVKEY is not a usable unencrypted RSA private key (store PEM or base64 PEM)" >&2
         exit 1
@@ -124,10 +124,36 @@ deb_version() {
     printf '%s\n' "$ver"
 }
 
+rollback_repodata() {
+    local backup=$1
+    if [ -s "$backup" ]; then
+        echo "WARN: rolling back $RELEASE_TAG/x86_64-repodata after post-publish verification failure" >&2
+        gh release upload "$RELEASE_TAG" "$backup" --clobber >&2 || \
+            echo "ERROR: failed to roll back $RELEASE_TAG/x86_64-repodata" >&2
+    fi
+}
+
+verify_dry_run() {
+    local repo_arg=$1 pkg=$2 extra_mount=${3:-}
+    local -a mounts=()
+    if [ -f work/signing_key ]; then
+        mounts+=(-v "$PWD/work/key:/key:ro")
+    fi
+    if [ -n "$extra_mount" ]; then
+        mounts+=(-v "$extra_mount")
+    fi
+    docker run --rm "${mounts[@]}" "$IMAGE" sh -c '
+        set -eu
+        if [ -d /key ]; then cp /key/*.plist /var/db/xbps/keys/; fi
+        xbps-install --repository="$1" -R "$2" -S
+        xbps-install --repository="$1" -R "$2" --dry-run "$3"
+    ' _ "$repo_arg" "$REPO_URL" "$pkg"
+}
+
 convert_one() {
     local repo=$1 glob=$2
     shift 2
-    local tag dir statefile tmpdeb dbf pkn pkv pkgver expected
+    local tag dir statefile tmpdeb html dbf pkn pkv pkgver expected attempt release_assets aid aname
     local -a deb_files
 
     case "$repo" in
@@ -144,7 +170,8 @@ convert_one() {
             ;;
         https://*|http://*)
             statefile="state/${repo//\//_}.txt"
-            tag=$(curl -fsSL "$repo" | grep -o 'href="[^"]*"' | sed 's/^href="//;s/"$//;s|.*/||' \
+            html=$(curl --retry 3 -fsSL "$repo") || return 1
+            tag=$(printf '%s\n' "$html" | grep -o 'href="[^"]*"' | sed 's/^href="//;s/"$//;s|.*/||' \
                 | while IFS= read -r n; do case "$n" in $glob) printf '%s\n' "$n";; esac; done \
                 | sort -V | tail -n1)
             if [ -z "$tag" ]; then
@@ -180,47 +207,61 @@ convert_one() {
             deb_files=("$dir/debs/$tag")
             ;;
         *)
-            gh release download -R "$repo" "$tag" -p "$glob" -D "$dir/debs" || true
+            if ! gh release download -R "$repo" "$tag" -p "$glob" -D "$dir/debs"; then
+                echo "::error::failed to download '$glob' in $repo@$tag; assets: $(gh api "repos/$repo/releases/tags/$tag" --jq '.assets[].name' 2>/dev/null | tr '\n' ' ')" >&2
+                return 1
+            fi
             shopt -s nullglob
             deb_files=("$dir"/debs/*.deb)
             shopt -u nullglob
             if [ ${#deb_files[@]} -eq 0 ]; then
-                echo "::error::glob '$glob' matched nothing in $repo@$tag; assets: $(gh api "repos/$repo/releases/latest" --jq '.assets[].name' | tr '\n' ' ')"
+                echo "::error::glob '$glob' matched nothing in $repo@$tag; assets: $(gh api "repos/$repo/releases/tags/$tag" --jq '.assets[].name' 2>/dev/null | tr '\n' ' ')"
                 return 1
             fi
             ;;
     esac
 
-    mkdir -p "$dir/pkgroot/binpkgs" || return 1
+    mkdir -p "$dir/pkgroot/binpkgs" "$dir/backup" || return 1
     if [ -s work/repodata.last ]; then
         cp work/repodata.last "$dir/pkgroot/binpkgs/x86_64-repodata" || return 1
+        cp work/repodata.last "$dir/backup/x86_64-repodata" || return 1
+    elif curl --retry 3 -fsSL -o "$dir/pkgroot/binpkgs/x86_64-repodata" "$RELEASE_URL/x86_64-repodata"; then
+        cp "$dir/pkgroot/binpkgs/x86_64-repodata" "$dir/backup/x86_64-repodata" || return 1
     else
-        curl --retry 3 -fsSL -o "$dir/pkgroot/binpkgs/x86_64-repodata" "$RELEASE_URL/x86_64-repodata" \
-            || rm -f "$dir/pkgroot/binpkgs/x86_64-repodata"
+        rm -f "$dir/pkgroot/binpkgs/x86_64-repodata"
     fi
 
-    keymount=""
-    if [ -f work/signing_key ]; then
-        keymount="-v $PWD/work/signing_key:/signing_key:ro"
-    fi
+    # Conversion runs without the signing key so unverified .deb inputs and xdeb never see XBPS_PRIVKEY.
     docker run --rm \
         -v "$PWD/$dir/debs:/in:ro" \
         -v "$PWD/$dir/pkgroot:/pkgroot" \
         -v "$PWD/scripts:/ci:ro" \
-        $keymount \
         "$IMAGE" /ci/convert.sh /in /pkgroot "$@" || return 1
 
-    gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
-        gh release create "$RELEASE_TAG" --title "xbps repository" \
-            --notes "Auto-converted .xbps packages, RSA-signed. Install: xbps-install -S -R ${RELEASE_URL} <pkg> (answer Y to import the signing key)" || return 1
-    gh release edit "$RELEASE_TAG" --draft=false || return 1
     if [ ! -s "$dir/pkgroot/manifest" ]; then
         echo "ERROR: conversion manifest missing for $repo" >&2
         return 1
     fi
-    gh release upload "$RELEASE_TAG" "$dir"/pkgroot/binpkgs/*.xbps "$dir"/pkgroot/binpkgs/*.xbps.sig2 "$dir/pkgroot/binpkgs/x86_64-repodata" --clobber || return 1
 
+    if [ -f work/signing_key ]; then
+        docker run --rm \
+            -v "$PWD/$dir/pkgroot/binpkgs:/binpkgs" \
+            -v "$PWD/work/signing_key:/signing_key:ro" \
+            "$IMAGE" sh -c '
+                set -eu
+                xbps-rindex --sign --privkey /signing_key --signedby "bagaskara815 <bagaskara815@gmail.com>" /binpkgs
+                xbps-rindex --sign-pkg --privkey /signing_key /binpkgs/*.xbps
+            ' || return 1
+    fi
+
+    # Verify repodata, signatures, and dependency resolution locally before touching the live release.
     while IFS=$'\t' read -r dbf pkn pkv; do
+        case "$pkn" in
+            ""|[!A-Za-z0-9]*|*[!A-Za-z0-9+._-]*)
+                echo "ERROR: invalid package name '$pkn' in manifest for $repo" >&2
+                return 1
+                ;;
+        esac
         pkgver=$(docker run --rm -v "$PWD/$dir/pkgroot:/pkgroot:ro" "$IMAGE" \
             xbps-query --repository=/pkgroot/binpkgs -p pkgver "$pkn") || return 1
         if [ "$pkgver" != "$pkv" ]; then
@@ -229,36 +270,67 @@ convert_one() {
         fi
         expected="${pkv}.x86_64.xbps"
         [ -f "$dir/pkgroot/binpkgs/$expected" ] || { echo "ERROR: produced $dbf != $expected" >&2; return 1; }
-        wait_repodata_fresh "$dir/pkgroot/binpkgs/x86_64-repodata" "$RELEASE_URL/x86_64-repodata" || return 1
-        check_url "$RELEASE_URL/$expected" || { echo "ERROR: $expected not served" >&2; return 1; }
-        check_url "$RELEASE_URL/${expected}.sig2" || { echo "ERROR: ${expected}.sig2 not served" >&2; return 1; }
-        eprefix=""
-        ekeymount=""
-        if [ -f work/signing_key ]; then
-            eprefix="cp /key/*.plist /var/db/xbps/keys/ && "
-            ekeymount="-v $PWD/work/key:/key:ro"
+        if [ -f work/signing_key ] && [ ! -f "$dir/pkgroot/binpkgs/${expected}.sig2" ]; then
+            echo "ERROR: signature ${expected}.sig2 missing for $dbf" >&2
+            return 1
+        fi
+        verify_dry_run /pkgroot/binpkgs "$pkn" "$PWD/$dir/pkgroot:/pkgroot:ro" || return 1
+    done < "$dir/pkgroot/manifest"
+
+    gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+        gh release create "$RELEASE_TAG" --title "xbps repository" \
+            --notes "Auto-converted .xbps packages, RSA-signed. Install: xbps-install -S -R ${RELEASE_URL} <pkg> (answer Y to import the signing key)" || return 1
+    gh release edit "$RELEASE_TAG" --draft=false || return 1
+    if ! gh release upload "$RELEASE_TAG" "$dir"/pkgroot/binpkgs/*.xbps "$dir"/pkgroot/binpkgs/*.xbps.sig2 "$dir/pkgroot/binpkgs/x86_64-repodata" --clobber; then
+        rollback_repodata "$dir/backup/x86_64-repodata"
+        return 1
+    fi
+
+    if ! wait_repodata_fresh "$dir/pkgroot/binpkgs/x86_64-repodata" "$RELEASE_URL/x86_64-repodata"; then
+        rollback_repodata "$dir/backup/x86_64-repodata"
+        return 1
+    fi
+
+    while IFS=$'\t' read -r dbf pkn pkv; do
+        expected="${pkv}.x86_64.xbps"
+        if ! check_url "$RELEASE_URL/$expected"; then
+            echo "ERROR: $expected not served" >&2
+            rollback_repodata "$dir/backup/x86_64-repodata"
+            return 1
+        fi
+        if ! check_url "$RELEASE_URL/${expected}.sig2"; then
+            echo "ERROR: ${expected}.sig2 not served" >&2
+            rollback_repodata "$dir/backup/x86_64-repodata"
+            return 1
         fi
         attempt=0
-        until docker run --rm $ekeymount "$IMAGE" sh -c "${eprefix}xbps-install --repository='$RELEASE_URL' -R '$REPO_URL' -S && xbps-install --repository='$RELEASE_URL' -R '$REPO_URL' --dry-run '$pkn'"; do
+        until verify_dry_run "$RELEASE_URL" "$pkn"; do
             attempt=$((attempt + 1))
             if [ "$attempt" -ge 6 ]; then
                 echo "ERROR: dry-run verification failed for $pkn after $attempt attempts" >&2
+                rollback_repodata "$dir/backup/x86_64-repodata"
                 return 1
             fi
             sleep 30
         done
+    done < "$dir/pkgroot/manifest"
+
+    release_assets=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[] | "\(.id)\t\(.name)"') || {
+        echo "::warning::failed to list assets for obsolete cleanup" >&2
+        release_assets=""
+    }
+    while IFS=$'\t' read -r dbf pkn pkv; do
+        expected="${pkv}.x86_64.xbps"
         while IFS=$'\t' read -r aid aname; do
+            [ -n "$aid" ] || continue
+            [[ "${aname#"$pkn"-}" != "$aname" && "${aname#"$pkn"-}" =~ ^[^-]+_[0-9]+\.x86_64\.xbps(\.sig2)?$ ]] || continue
             case "$aname" in
-                "$pkn"-*) ;;
-                *) continue;;
-            esac
-            case "$aname" in
-                "$expected"|"${expected}.sig2") continue;;
+                "$expected"|"${expected}.sig2") continue ;;
             esac
             echo "deleting obsolete asset $aname"
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$aid" >/dev/null || {
-                echo "::warning::failed to delete obsolete asset $aname"; }
-        done < <(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[] | "\(.id)\t\(.name)"')
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$aid" >/dev/null || \
+                echo "::warning::failed to delete obsolete asset $aname" >&2
+        done <<< "$release_assets"
     done < "$dir/pkgroot/manifest"
 
     cp "$dir/pkgroot/binpkgs/x86_64-repodata" work/repodata.last || return 1
