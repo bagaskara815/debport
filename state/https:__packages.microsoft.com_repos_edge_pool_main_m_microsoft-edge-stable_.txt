@@ -1,1 +1,1 @@
-microsoft-edge-stable_158.0.4370.33-1_amd64.deb
+microsoft-edge-stable_158.0.4370.45-1_amd64.deb
